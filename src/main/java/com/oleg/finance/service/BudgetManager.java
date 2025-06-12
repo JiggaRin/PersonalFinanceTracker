@@ -9,6 +9,7 @@ import java.util.Set;
 import java.util.UUID;
 
 import com.oleg.finance.model.Category;
+import com.oleg.finance.model.Expense;
 import com.oleg.finance.model.Transaction;
 
 public class BudgetManager {
@@ -16,10 +17,12 @@ public class BudgetManager {
     private static BudgetManager instance;
     private final List<Transaction> transactions;
     private final Set<Category> categories;
+    private final List<BudgetObserver> observers;
 
     private BudgetManager() {
         this.transactions = new ArrayList<>();
         this.categories = new HashSet<>();
+        this.observers = new ArrayList<>();
     }
 
     public static synchronized BudgetManager getInstance() {
@@ -29,12 +32,38 @@ public class BudgetManager {
         return instance;
     }
 
-    public List<Transaction> geTransactions() {
+    public List<Transaction> getTransactions() {
         return Collections.unmodifiableList(this.transactions);
     }
 
     public Set<Category> getCategories() {
         return Collections.unmodifiableSet(this.categories);
+    }
+
+    public void registerObserver(BudgetObserver observer) {
+        if(observer != null) {
+            observers.add(observer);
+        }
+    }
+
+    public void unregisterObserver(BudgetObserver observer) {
+        observers.remove(observer);
+    }
+
+    private double calculateTotalExpenses(Category category) {
+        return transactions.stream().filter(t -> t instanceof Expense && t.getCategory().equals(category)).mapToDouble(Transaction::getAmount).sum();
+    }
+
+    private void notifyBudgetObservers(Category category) {
+        if (category.getBudgetLimit() <= 0) {
+            return;
+        }
+        double totalSpent = this.calculateTotalExpenses(category);
+        if(totalSpent >= category.getBudgetLimit() * 0.9) {
+            for (BudgetObserver observer : observers) {
+                observer.onBudgetLimitApproached(category.getName(), totalSpent, totalSpent);
+            }
+        }
     }
 
     public void addTransaction(Transaction transaction) {
@@ -45,6 +74,9 @@ public class BudgetManager {
             throw new IllegalArgumentException("Category must exist in the system");
         }
         transactions.add(transaction);
+        if (transaction instanceof Expense) {
+            notifyBudgetObservers(transaction.getCategory());
+        }
     }
 
     public Transaction getTransactionById(UUID transactionId) {
@@ -71,6 +103,9 @@ public class BudgetManager {
         transaction.setCategory(category);
         transaction.setDate(date);
         transaction.setDescription(description);
+        if (transaction instanceof Expense) {
+            notifyBudgetObservers(transaction.getCategory());
+        }
     }
 
     public void deleteTransaction(UUID transactionId) {
@@ -107,8 +142,8 @@ public class BudgetManager {
         if (existedCategory == null) {
             throw new IllegalArgumentException("Category not found");
         }
-        if (!oldName.equalsIgnoreCase(newName) &&
-                categories.stream().anyMatch(c -> c.getName().equalsIgnoreCase(newName))) {
+        if (!oldName.equalsIgnoreCase(newName)
+                && categories.stream().anyMatch(c -> c.getName().equalsIgnoreCase(newName))) {
             throw new IllegalArgumentException("Desired category name already exists");
         }
 
@@ -121,7 +156,7 @@ public class BudgetManager {
         if (category == null) {
             throw new IllegalArgumentException("Category not found");
         }
-        if(transactions.stream().anyMatch(t -> t.getCategory().equals(category))) {
+        if (transactions.stream().anyMatch(t -> t.getCategory().equals(category))) {
             throw new IllegalArgumentException("Cannot delete category referenced by transactions");
         }
         categories.remove(category);
